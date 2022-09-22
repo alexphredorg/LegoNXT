@@ -1,0 +1,185 @@
+// Works with a two-motor steering robot like this design that:
+// https://www.nxtprograms.com/3-motor_chassis/index.html
+//
+// Drive motors on A and C
+// Ultrasonic sensors on Ports 1 and 2
+//
+// This uses the Ultrasonic sensor in Ping mode to safely run multiple
+// sensors.  NXC doesn't support this by default, so the device is 
+// programmed directly using information from the NXT Hardware SDK.
+
+#include "nxcdefs.h"
+#define NEAR 20 // distance in cm
+#define DELAY_DATA_PING 30
+#define DEBUG_ROWS 8
+#define MOTOR_SPEED 50
+
+sub spin_right()
+{
+  OnFwdSync(OUT_AC, MOTOR_SPEED, -100);
+}
+
+sub spin_left()
+{
+  OnFwdSync(OUT_AC, MOTOR_SPEED, 100);
+}
+
+sub forward()
+{
+  OnFwdSync(OUT_AC, MOTOR_SPEED, 0);
+}
+
+sub reverse()
+{
+  OnRevSync(OUT_AC, MOTOR_SPEED, 0);
+}
+
+//
+// Write to the ultrasonic sensor.  Doesn't return until
+// the device is ready again
+//
+// port: sensor port
+// buf: byte array with data to send
+// retLength: number of bytes expected in return
+//
+inline int UltrasonicWrite(int port, byte &buf[], byte retLength)
+{
+  int ec;
+
+  CommLSCheckStatusType status;
+  do
+  {
+    status.Port = port;
+    SysCommLSCheckStatus(status);
+  }
+  until (status.Result == LOWSPEED_IDLE);
+
+  ec = LowspeedWrite(port, retLength, buf);
+  Wait(DELAY_DATA_PING);
+  
+  do
+  {
+    SysCommLSCheckStatus(status);
+  }
+  until (status.Result == LOWSPEED_IDLE);
+
+  return ec;
+}
+
+//
+// Read from the ultrasonic sensor.
+//
+// port: sensor port
+// buf: byte array where results will be written
+// length: number of bytes to read
+//
+inline int UltrasonicRead(int port, byte &buf[], byte length)
+{
+  return LowspeedRead(port, length, buf);
+}
+
+//
+// Read a register from the ultrasonic sensor
+//
+// port: sensor port
+// register: the register to read
+// output: where to put the data read
+// length: the number of bytes to read
+//
+inline int UltrasonicReadRegister(int port, byte register, byte &output[], byte length)
+{
+  byte cmd[2];
+  int ec;
+
+  cmd[0] = 0x02;
+  cmd[1] = register;
+  ec = UltrasonicWrite(port, cmd, length);
+  if (ec != NO_ERR) return ec;
+
+  ec = UltrasonicRead(port, output, length);
+  return ec;
+}
+
+//
+// Set the sensor mode
+//
+// port: sensor port
+// mode: 0x01 for ping, 0x02 for continous
+//
+inline int UltrasonicSetMode(int port, byte mode)
+{
+  byte buf[3];
+  buf[0] = 0x02;
+  buf[1] = 0x41;
+  buf[2] = mode;
+  UltrasonicWrite(port, buf, 0);
+}
+
+//
+// Operates the Ultrasonic sensor in ping mode.  Each call does one measurement
+//
+byte UltrasonicPing(int port)
+{
+  long ec;
+  byte buf[1];
+
+  ec = UltrasonicSetMode(port, 0x01);
+  if (ec != NO_ERR) return 255;
+
+  ec = UltrasonicReadRegister(port, 0x42, buf, 1);
+  if (ec != NO_ERR) return 255;
+  
+  return buf[0];
+}
+
+//
+// Read a string register from the Ultrasonic device.  Strings up are up to
+// 8 characters
+//
+// port: sensor port
+// register: register to read
+//
+string UltrasonicReadStringRegister(int port, byte register)
+{
+  int ec;
+  int counter = 0;
+  byte buf[8];
+
+  UltrasonicReadRegister(port, register, buf, 8);
+  return ByteArrayToStr(buf);
+}
+
+task main()
+{
+  // setup sonar
+  SetSensorUltrasonic(S1);
+  SetSensorUltrasonic(S2);
+
+  int row = 0;
+  ResetScreen();
+
+  while (1)
+  {
+  	int lcd_line = LCD_LINE1 - (row % DEBUG_ROWS) * 8;
+
+  	TextOut(0, lcd_line, "reading                        ");
+    int left_sensor = UltrasonicPing(S1);
+  	int right_sensor = UltrasonicPing(S2);
+  
+  	TextOut(0, lcd_line, "                               ");
+  	NumOut(0, lcd_line, row);
+  	NumOut(32, lcd_line, left_sensor);
+  	NumOut(64, lcd_line, right_sensor);
+  
+    if (left_sensor <= NEAR && right_sensor <= NEAR)
+      reverse();
+    if (left_sensor <= NEAR && right_sensor > NEAR)
+      spin_right();
+    if (left_sensor > NEAR && right_sensor <= NEAR)
+      spin_left();
+    if (left_sensor > NEAR && right_sensor > NEAR)
+      forward();
+
+  	row++;
+  }
+}
